@@ -1,7 +1,7 @@
 from six import iteritems
 
 from .utils import DslBase
-from .field import InnerObject
+from .field_old import InnerObject
 from .connections import connections
 
 class Properties(InnerObject, DslBase):
@@ -75,8 +75,8 @@ class Mapping(object):
     def doc_type(self):
         return self.properties.name
 
-    def field(self, *args, **kwargs):
-        self.properties.property(*args, **kwargs)
+    def field(self, name, field):
+        self.properties.property(name, field)
         return self
 
     def meta(self, name, **kwargs):
@@ -88,6 +88,11 @@ class Mapping(object):
         return self
 
     def to_dict(self):
-        d = self.properties.to_dict()
-        d[self.doc_type].update(self._meta)
-        return d
+        ret = {}
+        ret[self.doc_type] = {
+            'properties': {}
+        }
+        for name, field in self.properties._params.get('properties').iteritems():
+            ret[self.doc_type]['properties'][name] = field.mapping
+        ret[self.doc_type].update(self._meta)
+        return ret
