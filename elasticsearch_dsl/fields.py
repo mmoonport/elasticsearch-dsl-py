@@ -75,7 +75,7 @@ class StringField(BaseField):
         super(StringField, self).validate(value)
         if isinstance(value, (list, tuple, set)):
             value = ','.join(value)
-        if type(value) is not str:
+        if not isinstance(value, basestring):
             raise ValidationError('field must be string')
 
 

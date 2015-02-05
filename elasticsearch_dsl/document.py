@@ -10,11 +10,10 @@ from .exceptions import ValidationError
 
 class MetaDict(object):
     def __init__(self, name, bases, fields):
-
         meta = fields.pop('meta', None)
         self.index = meta.get('index', None) if meta else None
         self._using = meta.get('using', None) if meta else None
-
+        self.doc_info = {}
         self.doc_type = meta.get('doc_type', re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()) \
             if meta else re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()
 
@@ -24,6 +23,10 @@ class MetaDict(object):
         for name, value in list(fields.iteritems()):
             if isinstance(value, BaseField):
                 self.mapping.field(name, value)
+
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
 
     def __iter__(self):
         for attr in dir(self):
@@ -84,6 +87,8 @@ class BaseDocumentMeta(type):
 class BaseDocument(object):
     __metaclass__ = BaseDocumentMeta
     def __init__(self, **kwargs):
+        self._data = {}
+        self.meta.doc_info = {}
         errors = []
         for name, field in self._fields.iteritems():
             if name in kwargs.keys():
@@ -92,13 +97,13 @@ class BaseDocument(object):
                 setattr(self, name, field.to_python(field.default))
 
 
-        # update meta information from ES
         for k in META_FIELDS:
             if '_' + k in kwargs.keys():
                 if k == "type":
-                    setattr(self.meta, "doc_type", kwargs['_' + k])
+                    self.meta.doc_info['doc_type'] = kwargs['_{}'.format(k)]
                 else:
-                    setattr(self.meta, k, kwargs['_' + k])
+                    self.meta.doc_info[k] = kwargs['_{}'.format(k)]
+
 
     def __setattr__(self, key, value):
         self._data[key] = value
@@ -106,11 +111,11 @@ class BaseDocument(object):
 
     @property
     def id(self):
-        return getattr(self.meta, 'id', None)
+        return self.meta.doc_info.get('id', None)
 
     @id.setter
     def id(self, id):
-        self.meta.id = id;
+        self.meta.doc_info['id'] = id;
 
     @classmethod
     def init(cls, index=None, using=None):
@@ -140,15 +145,15 @@ class BaseDocument(object):
     def delete(self, using=None, index=None, **kwargs):
         es = self._get_connection(using)
         if index is None:
-            index = self.meta.index
+            index = self.meta.doc_info.get('index', self.meta.index)
         if index is None:
             raise #XXX - no index
         # extract parent, routing etc from _meta
-        doc_meta = dict((k, getattr(self.meta, k)) for k in DOC_META_FIELDS if k in self.meta)
+        doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
         doc_meta.update(kwargs)
         return es.delete(
             index=index,
-            doc_type=self.meta.name,
+            doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
             **doc_meta
         )
 
@@ -169,15 +174,15 @@ class BaseDocument(object):
 
         es = self._get_connection(using)
         if index is None:
-            index = self.meta.index
+            index = self.meta.doc_info.get('index', self.meta.index)
         if index is None:
             raise #XXX - no index
         # extract parent, routing etc from _meta
-        doc_meta = dict((k, self.meta[k]) for k in DOC_META_FIELDS if k in self.meta)
+        doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
         doc_meta.update(kwargs)
         meta = es.index(
             index=index,
-            doc_type=self.meta.name,
+            doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
             body=self.to_dict(),
             **doc_meta
         )
@@ -185,9 +190,9 @@ class BaseDocument(object):
         for k in META_FIELDS:
             if '_' + k in meta:
                 if k == "type":
-                    setattr(self.meta, "doc_type", meta['_' + k])
+                    self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
                 else:
-                    setattr(self.meta, k, meta['_' + k])
+                    self.meta.doc_info[k] = meta['_{}'.format(k)]
         # return True/False if the document has been created/updated
         return meta['created']
 
