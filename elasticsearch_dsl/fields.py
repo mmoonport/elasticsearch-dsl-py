@@ -22,7 +22,7 @@ class BaseField(object):
     def __init__(self, required=False, default=None, **kwargs):
         self.required = required
         self.default = default
-        self._meta = self._meta or {}
+        self._meta = getattr(self, '_meta', {})
         for key, value in kwargs.iteritems():
             if key in META_FIELDS:
                 self._meta[key] = value
@@ -38,6 +38,21 @@ class BaseField(object):
     @property
     def mapping(self):
         return self._meta
+
+
+class BooleanField(BaseField):
+
+    def to_python(self, value):
+        try:
+            value = bool(value)
+        except ValueError:
+            pass
+        return value
+
+    def validate(self, value):
+        if not isinstance(value, bool):
+            raise ValidationError('field only accepts boolean values')
+
 
 
 
@@ -70,7 +85,10 @@ class ListField(StringField):
 
     def to_python(self, value):
         if value:
-            return value.split(',')
+            if isinstance(value, str):
+                return value.split(',')
+            elif isinstance(value, (list, tuple, set)):
+                return value
         return None
 
     def validate(self, value):

@@ -437,6 +437,11 @@ class Search(object):
         s._using = client
         return s
 
+    def index(self, index):
+        s = self._clone()
+        s._index = [index]
+        return s
+
     def count(self):
         """
         Return the number of hits matching the query and filters. Note that

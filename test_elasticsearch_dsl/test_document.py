@@ -110,5 +110,4 @@ def test_document_inheritance():
 if __name__ == "__main__":
     test_declarative_mapping_definition()
     test_document_can_be_created_dynamicaly()
-    print MySubDoc.query[:200].execute()
     # test_document_inheritance()

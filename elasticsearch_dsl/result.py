@@ -7,6 +7,9 @@ class Response(AttrDict):
         super(AttrDict, self).__setattr__('_callbacks', callbacks or {})
         super(Response, self).__init__(response)
 
+    def __len__(self):
+        return len(self.hits)
+
     def __iter__(self):
         return iter(self.hits)
 
