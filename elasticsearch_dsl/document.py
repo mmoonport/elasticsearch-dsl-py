@@ -9,6 +9,23 @@ from .connections import connections
 from .exceptions import ValidationError
 from .queue import Queue
 
+
+class BulkInsert(object):
+    def __init__(self, cls, index=None):
+        self.doc_class = cls
+        self.prev_index = self.doc_class.meta.index
+        self.doc_class.meta.index = index or self.prev_index
+        self.index = self.doc_class.meta.index
+
+    def __enter__(self):
+        self.doc_class._bulk = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.doc_class._bulk = False
+        self.doc_class.meta.index = self.prev_index
+        self.doc_class._bulk_queue._send(self.index)
+
+
 class MetaDict(object):
     def __init__(self, name, bases, fields):
         meta = fields.pop('meta', None)
@@ -56,6 +73,7 @@ class BaseDocumentMeta(type):
         new_class.meta = MetaDict(name, bases, fields)
         new_class.meta._using = Elasticsearch(hosts='es.xocur.com:9200')
         new_class._data = {}
+        new_class._bulk = False
 
         # document inheritance - include the fields from parents' mappings and
         # index/using values
@@ -198,26 +216,29 @@ class BaseDocument(object):
         doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
         doc_meta.update(kwargs)
 
-        if not bulk:
-            meta = es.index(
-                index=self.meta.doc_info['index'],
-                doc_type= self.meta.doc_info['doc_type'],
-                body=self.to_dict(),
-                **doc_meta
-            )
-            # update meta information from ES
-            for k in META_FIELDS:
-                if '_' + k in meta:
-                    if k == "type":
-                        self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
-                    else:
-                        self.meta.doc_info[k] = meta['_{}'.format(k)]
-            # return True/False if the document has been created/updated
-            return meta['created']
-        else:
+        if bulk or self._bulk:
             self._bulk_queue.append(self, index)
             if flush:
                 self._bulk_queue._send(index)
+            return True
+
+
+        meta = es.index(
+            index=self.meta.doc_info['index'],
+            doc_type= self.meta.doc_info['doc_type'],
+            body=self.to_dict(),
+            **doc_meta
+        )
+        # update meta information from ES
+        for k in META_FIELDS:
+            if '_' + k in meta:
+                if k == "type":
+                    self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
+                else:
+                    self.meta.doc_info[k] = meta['_{}'.format(k)]
+        # return True/False if the document has been created/updated
+        return meta['created']
+
 
     def _get_connection(self, using=None):
         return connections.get_connection(using or self.meta._using)

@@ -75,6 +75,7 @@ class StringField(BaseField):
         return None
 
 
+
     def validate(self, value):
         super(StringField, self).validate(value)
         if isinstance(value, (list, tuple, set)):

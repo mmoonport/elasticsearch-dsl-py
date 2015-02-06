@@ -1,10 +1,11 @@
 import datetime
 
-from elasticsearch_dsl.document import BaseDocument
+from elasticsearch_dsl.document import BaseDocument, BulkInsert
 from elasticsearch_dsl.fields import *
-class MyDoc(BaseDocument):
+class   MyDoc(BaseDocument):
     title = StringField(index='analyzed')
     name = StringField()
+    test_list = ListField()
     created_at = DateTimeField()
 
 class MySubDoc(MyDoc):
@@ -74,10 +75,12 @@ def test_document_inheritance():
 
 
 def test_document_to_es():
-    md = MyDoc(title='Hello')
-    md.name = 'My Fancy Document'
-    md.created_at = datetime.datetime.utcnow()
-    md.save(index='test-index', bulk=True, flush=True)
+    with BulkInsert(MyDoc, 'test-index'):
+        md = MyDoc(title='Hello')
+        md.name = 'My Fancy Document 10'
+        md.test_list = [u't2.small']
+        md.created_at = datetime.datetime.utcnow()
+        md.save()
 #
 # def test_meta_fields_are_stored_in_meta_and_ignored_by_to_dict():
 #     md = MySubDoc(id=42, name='My First doc!')
