@@ -1,3 +1,0 @@
-six
-python-dateutil
-elasticsearch>=1.0.0

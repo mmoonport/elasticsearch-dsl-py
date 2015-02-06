@@ -71,6 +71,13 @@ def test_document_inheritance():
             }
         }
     } == MySubDoc.meta.mapping.to_dict()
+
+
+def test_document_to_es():
+    md = MyDoc(title='Hello')
+    md.name = 'My Fancy Document'
+    md.created_at = datetime.datetime.utcnow()
+    md.save(index='test-index', bulk=True, flush=True)
 #
 # def test_meta_fields_are_stored_in_meta_and_ignored_by_to_dict():
 #     md = MySubDoc(id=42, name='My First doc!')
@@ -108,6 +115,7 @@ def test_document_inheritance():
 
 
 if __name__ == "__main__":
-    test_declarative_mapping_definition()
-    test_document_can_be_created_dynamicaly()
+    # test_declarative_mapping_definition()
+    # test_document_can_be_created_dynamicaly()
     # test_document_inheritance()
+    test_document_to_es()

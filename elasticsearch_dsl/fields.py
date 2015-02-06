@@ -17,6 +17,10 @@ META_FIELDS = frozenset((
     'index', 'using', 'score',
 )).union(DOC_META_FIELDS)
 
+FULL_META_FIELDS = frozenset((
+    'doc_type',
+)).union(META_FIELDS)
+
 
 class BaseField(object):
     def __init__(self, required=False, default=None, **kwargs):

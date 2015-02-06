@@ -4,15 +4,17 @@ from elasticsearch import Elasticsearch
 
 from .search import Search
 from .mapping import Mapping
-from .fields import BaseField, DOC_META_FIELDS, META_FIELDS
+from .fields import BaseField, DOC_META_FIELDS, META_FIELDS, FULL_META_FIELDS
 from .connections import connections
 from .exceptions import ValidationError
+from .queue import Queue
 
 class MetaDict(object):
     def __init__(self, name, bases, fields):
         meta = fields.pop('meta', None)
         self.index = meta.get('index', None) if meta else None
         self._using = meta.get('using', None) if meta else None
+        self.bulk_size = meta.get('bulk_size', None) if meta else None
         self.doc_info = {}
         self.doc_type = meta.get('doc_type', re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()) \
             if meta else re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()
@@ -64,11 +66,16 @@ class BaseDocumentMeta(type):
                 new_class.meta._using = new_class.meta._using or b.meta._using
                 new_class.meta.index = new_class.meta.index or b.meta.index
                 new_class.meta.doc_type = new_class.meta.doc_type or b.meta.doc_type
+                new_class.meta.bulk_size = new_class.meta.bulk_size or b.meta.bulk_size
 
             if hasattr(b, '_fields'):
                 for field_name, field in b._fields.iteritems():
                     if isinstance(field, BaseField):
                         doc_fields[field_name] = field
+
+        new_class._bulk_queue = Queue(index=new_class.meta.index,
+                                      using=new_class.meta._using,
+                                      limit=new_class.meta.bulk_size)
 
         for field_name, field in fields.iteritems():
             if isinstance(field, BaseField):
@@ -108,6 +115,14 @@ class BaseDocument(object):
     def __setattr__(self, key, value):
         self._data[key] = value
         super(BaseDocument, self).__setattr__(key, value)
+
+    @classmethod
+    def drop(cls, index=None, using=None):
+        es = connections.get_connection(using or cls.meta._using)
+        try:
+            return es.indices.delete(index or cls.meta.index)
+        except:
+            return None
 
     @property
     def id(self):
@@ -168,7 +183,7 @@ class BaseDocument(object):
         )
         return cls.from_es(doc)
 
-    def save(self, using=None, index=None, **kwargs):
+    def save(self, using=None, index=None, bulk=False, flush=False, **kwargs):
         self.clean()
         self.validate()
 
@@ -178,23 +193,31 @@ class BaseDocument(object):
         if index is None:
             raise #XXX - no index
         # extract parent, routing etc from _meta
+        self.meta.doc_info['index'] = index
+        self.meta.doc_info['doc_type'] = self.meta.doc_info.get('doc_type', self.meta.name)
         doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
         doc_meta.update(kwargs)
-        meta = es.index(
-            index=index,
-            doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
-            body=self.to_dict(),
-            **doc_meta
-        )
-        # update meta information from ES
-        for k in META_FIELDS:
-            if '_' + k in meta:
-                if k == "type":
-                    self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
-                else:
-                    self.meta.doc_info[k] = meta['_{}'.format(k)]
-        # return True/False if the document has been created/updated
-        return meta['created']
+
+        if not bulk:
+            meta = es.index(
+                index=self.meta.doc_info['index'],
+                doc_type= self.meta.doc_info['doc_type'],
+                body=self.to_dict(),
+                **doc_meta
+            )
+            # update meta information from ES
+            for k in META_FIELDS:
+                if '_' + k in meta:
+                    if k == "type":
+                        self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
+                    else:
+                        self.meta.doc_info[k] = meta['_{}'.format(k)]
+            # return True/False if the document has been created/updated
+            return meta['created']
+        else:
+            self._bulk_queue.append(self, index)
+            if flush:
+                self._bulk_queue._send(index)
 
     def _get_connection(self, using=None):
         return connections.get_connection(using or self.meta._using)
@@ -202,10 +225,19 @@ class BaseDocument(object):
     def to_dict(self):
         data = {}
         for key, value in self._data.iteritems():
-            if not key.startswith('__'):
-                if key in self._fields.keys():
-                    value = getattr(self, key, None)
-                    data[key] = self._fields[key].to_python(value)
-                else:
-                    data[key] = getattr(self, key, None)
+            if key in self._fields.keys():
+                value = getattr(self, key, None)
+                data[key] = self._fields[key].to_python(value)
+            else:
+                data[key] = getattr(self, key, None)
         return data
+
+
+    def to_es(self):
+        self.meta.doc_info['index'] = self.meta.doc_info.get('index', self.meta.index)
+        self.meta.doc_info['doc_type'] = self.meta.doc_info.get('doc_type', self.meta.name)
+        doc = {"_source": self.to_dict()}
+        doc_meta = dict(("_{}".format(k), self.meta.doc_info.get(k)) for k in FULL_META_FIELDS  if k in self.meta.doc_info.keys() and self.meta.doc_info[k] is not None)
+        doc_meta['_type'] = doc_meta.pop('_doc_type')
+        doc.update(doc_meta)
+        return doc
