@@ -31,7 +31,7 @@ class Queue(object):
     def _send(self, index):
         index = (index or self.index)
         es = connections.get_connection(self.using)
-        bulk(client=es, index=index, actions=self.__iter_queue(index), chunk_size=self.limit)
+        bulk(client=es, index=index, actions=self.__iter_queue(index), chunk_size=self.limit, timeout=60)
 
 
 
