@@ -36,7 +36,7 @@ class BaseField(object):
         return value
 
     def validate(self, value):
-        if not value and self.required:
+        if value is None and self.required:
             raise ValidationError('field is required')
 
     @property
@@ -195,6 +195,8 @@ class DecimalField(BaseField):
         return value.quantize(self.precision, rounding=self.rounding)
 
     def validate(self, value):
+        super(DecimalField, self).validate(value)
+        value = value or decimal.Decimal(0)
         if not isinstance(value, decimal.Decimal):
             if not isinstance(value, basestring):
                 value = unicode(value)
