@@ -45,6 +45,11 @@ class BaseField(object):
 
 
 class BooleanField(BaseField):
+    def __init__(self, **kwargs):
+        self._meta = {
+            'type': 'boolean'
+        }
+        super(BooleanField, self).__init__(**kwargs)
 
     def to_python(self, value):
         try:
@@ -73,7 +78,6 @@ class StringField(BaseField):
         if value:
             return str(value)
         return None
-
 
 
     def validate(self, value):
@@ -115,6 +119,10 @@ class IntField(BaseField):
         self.max_value = max_value
         super(IntField, self).__init__(**kwargs)
 
+        self._meta = {
+            'type': 'integer'
+        }
+
     def to_python(self, value):
         if value:
             return int(value)
@@ -136,6 +144,10 @@ class FloatField(BaseField):
     def __init__(self, min_value=None, max_value=None, **kwargs):
         self.min_value = min_value
         self.max_value = max_value
+
+        self._meta = {
+            'type': 'float'
+        }
 
         super(FloatField, self).__init__(**kwargs)
 
@@ -166,6 +178,10 @@ class DecimalField(BaseField):
         self.max_value = max_value
         self.precision = decimal.Decimal(".%s" % ("0" * precision))
         self.rounding = rounding
+
+        self._meta = {
+            'type': 'float'
+        }
 
         super(DecimalField, self).__init__(**kwargs)
 
