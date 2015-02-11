@@ -1,10 +1,16 @@
 from elasticsearch_dsl.connections import connections
 from elasticsearch.helpers import bulk
+from retrying import retry
 
 import elasticsearch
 __author__ = 'Matthew Moon'
 __filename__ = 'queue'
 
+@retry(wait_fixed=60000)
+def _send_to_es(instance, index):
+    es = connections.get_connection(instance.using)
+    bulk(client=es, index=index, actions=instance.__iter_queue(index), chunk_size=instance.limit, timeout=60)
+    instance._queue[index] = []
 
 class Queue(object):
     def __init__(self, index=None, using=None, limit=None):
@@ -22,16 +28,10 @@ class Queue(object):
             self._send(index)
 
     def __iter_queue(self, queue='default'):
-        while True:
-            try:
-                yield self._queue[queue].pop(0).to_es()
-            except:
-                return
+        for item in self._queue[queue]:
+            yield item.to_es()
 
     def _send(self, index):
-        index = (index or self.index)
-        es = connections.get_connection(self.using)
-        bulk(client=es, index=index, actions=self.__iter_queue(index), chunk_size=self.limit, timeout=60)
-
+        _send_to_es(self, (index or self.index))
 
 
