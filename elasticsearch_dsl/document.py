@@ -155,6 +155,12 @@ class BaseDocument(object):
         cls.meta.init(index, using)
 
     @classmethod
+    def count(cls, using=None, index=None, doc_type=None):
+        es = connections.get_connection(using or cls.meta._using)
+        count = es.count(index=(index or cls.meta.index), doc_type=(doc_type or cls.meta.doc_info.get('doc_type', cls.meta.name)))
+        return count.get('count', 0)
+
+    @classmethod
     def from_es(cls, hit):
         doc = hit.copy()
         doc.update(doc.pop('_source'))
