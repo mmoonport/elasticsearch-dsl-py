@@ -2,6 +2,7 @@ import re
 
 from elasticsearch import Elasticsearch
 from retrying import retry
+from elasticsearch_dsl.utils import _count_index, _delete_document, _get_document, _save_document, _drop_index
 
 from .search import Search
 from .mapping import Mapping
@@ -9,27 +10,6 @@ from .fields import BaseField, DOC_META_FIELDS, META_FIELDS, FULL_META_FIELDS
 from .connections import connections
 from .exceptions import ValidationError
 from .queue import Queue
-
-
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
-def _save_document(conn, index, doc_type, body, extra):
-    return conn.index(index=index, doc_type=doc_type, body=body, **extra)
-
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
-def _delete_document(conn, index, doc_type, extra):
-    return conn.delete(index=index, doc_type=doc_type, **extra)
-
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
-def _get_document(es, index, doc_type, id, kwargs):
-    return es.get(index=index, doc_type=doc_type, id=id, **kwargs)
-
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
-def _drop_index(conn, index):
-    return conn.indices.delete(index)
-
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
-def _count_index(conn, index, doc_type):
-    return conn.count(index=index, doc_type=doc_type)
 
 class BulkInsert(object):
     def __init__(self, cls, index=None):

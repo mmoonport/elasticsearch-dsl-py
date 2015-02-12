@@ -1,3 +1,5 @@
+from elasticsearch import TransportError
+from retrying import retry
 from six import iteritems, string_types
 
 from elasticsearch.helpers import scan
@@ -5,7 +7,7 @@ from elasticsearch.helpers import scan
 from .query import Q, EMPTY_QUERY, Filtered
 from .filter import F, EMPTY_FILTER
 from .aggs import A, AggBase
-from .utils import DslBase
+from .utils import DslBase, _count_search, _search, _scan
 from .result import Response, Result
 from .connections import connections
 
@@ -78,6 +80,7 @@ class AggsProxy(AggBase, DslBase):
 
     def to_dict(self):
         return super(AggsProxy, self).to_dict().get('aggs', {})
+
 
 
 class Search(object):
@@ -451,11 +454,7 @@ class Search(object):
 
         d = self.to_dict(count=True)
         # TODO: failed shards detection
-        return es.count(
-            index=self._index,
-            doc_type=self._doc_type,
-            body=d
-        )['count']
+        return _count_search(conn=es, index=self._index, doc_type=self._doc_type, body=d)['count']
 
     def execute(self):
         """
@@ -463,25 +462,13 @@ class Search(object):
         the data.
         """
         es = connections.get_connection(self._using)
-
+        resp = _search(conn=es, index=self._index, doc_type=self._doc_type, body=self.to_dict(), extra=self._params)
         return Response(
-            es.search(
-                index=self._index,
-                doc_type=self._doc_type,
-                body=self.to_dict(),
-                **self._params
-            ),
+            resp,
             callbacks=self._doc_type_map
         )
 
     def scan(self):
         es = connections.get_connection(self._using)
-
-        for hit in scan(
-                es,
-                query=self.to_dict(),
-                index=self._index,
-                doc_type=self._doc_type,
-                **self._params
-            ):
+        for hit in _scan(conn=es, query=self.to_dict(), index=self._index, doc_type=self._doc_type, params=self._params):
             yield self._doc_type_map.get(hit['_type'], Result)(hit)

@@ -1,4 +1,7 @@
 from __future__ import unicode_literals
+from elasticsearch import TransportError
+from elasticsearch.helpers import bulk, scan
+from retrying import retry
 
 from six import iteritems, add_metaclass
 from six.moves import map
@@ -419,3 +422,86 @@ class ObjectBase(AttrDict):
                 v = v.to_dict() if hasattr(v, 'to_dict') else v
             out[k] = v
         return out
+
+
+
+# Retry wrapped es functions
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _save_document(conn, index, doc_type, body, extra):
+    return conn.index(index=index, doc_type=doc_type, body=body, **extra)
+
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _delete_document(conn, index, doc_type, extra):
+    return conn.delete(index=index, doc_type=doc_type, **extra)
+
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _get_document(es, index, doc_type, id, kwargs):
+    resp = None
+    try:
+        resp = es.get(index=index, doc_type=doc_type, id=id, **kwargs)
+    except TransportError, e:
+        if e.status_code != 404:
+            raise e
+    return resp
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _drop_index(conn, index):
+    return conn.indices.delete(index)
+
+@retry(wait_fixed=60000)
+def _bulk(conn, index, actions, chunk_size, timeout):
+    return bulk(client=conn, index=index, actions=actions, chunk_size=chunk_size, timeout=timeout)
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _count_index(conn, index, doc_type):
+    print 'in count function'
+    count = {}
+    try:
+        count =  conn.count(
+            index=index,
+            doc_type=doc_type)
+        print 'got count of {}'.format(count)
+    except TransportError, e:
+        print 'whoops: {}'.format(e)
+        print type(e.status_code)
+        if e.status_code != 404:
+            print 'raising e'
+            raise e
+    return count
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _search(conn, index, doc_type, body, extra):
+    resp = None
+    try:
+        resp = conn.search(
+                index=index,
+                doc_type=doc_type,
+                body=body,
+                **extra
+            )
+    except TransportError, e:
+        if e.status_code != 404:
+            raise e
+    return resp
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _count_search(conn, index, doc_type, body):
+    count = {}
+    try:
+        count =  conn.count(
+            index=index,
+            doc_type=doc_type,
+            body=body)
+    except TransportError, e:
+        if e.status_code != 404:
+            raise e
+    return count
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _scan(conn, query, index, doc_type, params):
+    return scan(
+                conn,
+                query=query,
+                index=index,
+                doc_type=doc_type,
+            )
