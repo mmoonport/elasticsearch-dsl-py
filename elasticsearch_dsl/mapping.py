@@ -1,4 +1,5 @@
 from six import iteritems
+from retrying import retry
 
 from .utils import DslBase
 from .field_old import InnerObject
@@ -13,6 +14,16 @@ class Properties(InnerObject, DslBase):
     def name(self):
         return self._name
 
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _save_mapping(conn, index, doc_type, body):
+    if not conn.indices.exists(index=index):
+        conn.indices.create(index=index, body={'mappings': body})
+    else:
+        conn.indices.put_mapping(index=index, doc_type=doc_type, body=body)
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _get_mapping(conn, index, doc_type):
+    return conn.indices.get_mapping(index=index, doc_type=doc_type)
 
 class Mapping(object):
     def __init__(self, name):
@@ -28,14 +39,11 @@ class Mapping(object):
     def save(self, index, using='default'):
         # TODO: analyzers, ...
         es = connections.get_connection(using)
-        if not es.indices.exists(index=index):
-            es.indices.create(index=index, body={'mappings': self.to_dict()})
-        else:
-            es.indices.put_mapping(index=index, doc_type=self.doc_type, body=self.to_dict())
+        _save_mapping(es, index, self.doc_type, self.to_dict())
 
     def update_from_es(self, index, using='default'):
         es = connections.get_connection(using)
-        raw = es.indices.get_mapping(index=index, doc_type=self.doc_type)
+        raw = _get_mapping(es, index, self.doc_type)
         raw = raw[index]['mappings'][self.doc_type]
 
         for name, definition in iteritems(raw['properties']):

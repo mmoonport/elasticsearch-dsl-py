@@ -1,6 +1,7 @@
 import re
 
 from elasticsearch import Elasticsearch
+from retrying import retry
 
 from .search import Search
 from .mapping import Mapping
@@ -9,6 +10,26 @@ from .connections import connections
 from .exceptions import ValidationError
 from .queue import Queue
 
+
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _save_document(conn, index, doc_type, body, extra):
+    return conn.index(index=index, doc_type=doc_type, body=body, **extra)
+
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _delete_document(conn, index, doc_type, extra):
+    return conn.delete(index=index, doc_type=doc_type, **extra)
+
+@retry(stop_max_attemp_number=5, wait_fixed=3000)
+def _get_document(es, index, doc_type, id, kwargs):
+    return es.get(index=index, doc_type=doc_type, id=id, **kwargs)
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _drop_index(conn, index):
+    return conn.indices.delete(index)
+
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+def _count_index(conn, index, doc_type):
+    return conn.count(index=index, doc_type=doc_type)
 
 class BulkInsert(object):
     def __init__(self, cls, index=None):
@@ -109,6 +130,9 @@ class BaseDocumentMeta(type):
         return new_class
 
 
+
+
+
 class BaseDocument(object):
     __metaclass__ = BaseDocumentMeta
     def __init__(self, **kwargs):
@@ -138,7 +162,8 @@ class BaseDocument(object):
     def drop(cls, index=None, using=None):
         es = connections.get_connection(using or cls.meta._using)
         try:
-            return es.indices.delete(index or cls.meta.index)
+            resp = _drop_index(es, index or cls.meta.index)
+            return resp
         except:
             return None
 
@@ -157,7 +182,7 @@ class BaseDocument(object):
     @classmethod
     def count(cls, using=None, index=None, doc_type=None):
         es = connections.get_connection(using or cls.meta._using)
-        count = es.count(index=(index or cls.meta.index), doc_type=(doc_type or cls.meta.doc_info.get('doc_type', cls.meta.name)))
+        count = _count_index(es, index=(index or cls.meta.index), doc_type=(doc_type or cls.meta.doc_info.get('doc_type', cls.meta.name)))
         return count.get('count', 0)
 
     @classmethod
@@ -190,21 +215,19 @@ class BaseDocument(object):
         # extract parent, routing etc from _meta
         doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
         doc_meta.update(kwargs)
-        return es.delete(
-            index=index,
-            doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
-            **doc_meta
-        )
+
+        return _delete_document(es, index=index,
+                                doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
+                                extra=doc_meta)
+
 
     @classmethod
     def get(cls, id, using=None, index=None, **kwargs):
         es = connections.get_connection(using or cls.meta._using)
-        doc = es.get(
-            index=index or cls.meta.index,
+        doc = _get_document(es, index=index or cls.meta.index,
             doc_type=cls.meta.name,
             id=id,
-            **kwargs
-        )
+            **kwargs)
         return cls.from_es(doc)
 
     def save(self, using=None, index=None, bulk=False, flush=False, **kwargs):
@@ -228,13 +251,11 @@ class BaseDocument(object):
                 self._bulk_queue._send(index)
             return True
 
-
-        meta = es.index(
-            index=self.meta.doc_info['index'],
-            doc_type= self.meta.doc_info['doc_type'],
-            body=self.to_dict(),
-            **doc_meta
-        )
+        meta = _save_document(es,
+                              index=self.meta.doc_info['index'],
+                              doc_type=self.meta.doc_info['doc_type'],
+                              body=self.to_dict(),
+                              extra=doc_meta)
         # update meta information from ES
         for k in META_FIELDS:
             if '_' + k in meta:
