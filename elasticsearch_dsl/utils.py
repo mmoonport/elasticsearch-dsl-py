@@ -428,11 +428,23 @@ class ObjectBase(AttrDict):
 # Retry wrapped es functions
 @retry(stop_max_attemp_number=5, wait_fixed=3000)
 def _save_document(conn, index, doc_type, body, extra):
-    return conn.index(index=index, doc_type=doc_type, body=body, **extra)
+    resp = None
+    try:
+        resp = conn.index(index=index, doc_type=doc_type, body=body, **extra)
+    except TransportError, e:
+        if e.status_code != 404:
+            raise e
+    return resp
 
 @retry(stop_max_attemp_number=5, wait_fixed=3000)
 def _delete_document(conn, index, doc_type, extra):
-    return conn.delete(index=index, doc_type=doc_type, **extra)
+    resp = None
+    try:
+        resp = conn.delete(index=index, doc_type=doc_type, **extra)
+    except TransportError, e:
+        if e.status_code != 404:
+            raise e
+    return resp
 
 @retry(stop_max_attemp_number=5, wait_fixed=3000)
 def _get_document(es, index, doc_type, id, kwargs):
