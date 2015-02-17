@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+import re
 from elasticsearch import TransportError
 from elasticsearch.helpers import bulk, scan
 from retrying import retry
@@ -7,6 +8,9 @@ from six import iteritems, add_metaclass
 from six.moves import map
 
 from .exceptions import UnknownDslObject
+
+def _make_doc_type_from_name(name):
+    return re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()
 
 def _wrap(val):
     if isinstance(val, dict):
@@ -426,39 +430,49 @@ class ObjectBase(AttrDict):
 
 
 # Retry wrapped es functions
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _save_document(conn, index, doc_type, body, extra):
     resp = None
     try:
         resp = conn.index(index=index, doc_type=doc_type, body=body, **extra)
+        print resp
     except TransportError, e:
-        if e.status_code != 404:
+        print e
+        if 400 < e.status_code < 410:
             raise e
     return resp
 
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _delete_document(conn, index, doc_type, extra):
     resp = None
     try:
         resp = conn.delete(index=index, doc_type=doc_type, **extra)
     except TransportError, e:
-        if e.status_code != 404:
+        if 400 < e.status_code < 410:
             raise e
     return resp
 
-@retry(stop_max_attemp_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _get_document(es, index, doc_type, id, kwargs):
     resp = None
     try:
         resp = es.get(index=index, doc_type=doc_type, id=id, **kwargs)
+        print resp
     except TransportError, e:
-        if e.status_code != 404:
+        print e
+        if 400 < e.status_code < 410:
             raise e
     return resp
 
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _drop_index(conn, index):
-    return conn.indices.delete(index)
+    resp = None
+    try:
+        resp = conn.indices.delete(index)
+    except TransportError, e:
+        if 400 < e.status_code < 410:
+            raise e
+    return resp
 
 @retry(wait_fixed=60000)
 def _bulk(conn, index, actions, chunk_size, timeout):
@@ -476,7 +490,7 @@ def _count_index(conn, index, doc_type):
     except TransportError, e:
         print 'whoops: {}'.format(e)
         print type(e.status_code)
-        if e.status_code != 404:
+        if 400 < e.status_code < 410:
             print 'raising e'
             raise e
     return count
@@ -492,7 +506,7 @@ def _search(conn, index, doc_type, body, extra):
                 **extra
             )
     except TransportError, e:
-        if e.status_code != 404:
+        if 400 < e.status_code < 410:
             raise e
     return resp
 
@@ -505,7 +519,7 @@ def _count_search(conn, index, doc_type, body):
             doc_type=doc_type,
             body=body)
     except TransportError, e:
-        if e.status_code != 404:
+        if 400 < e.status_code < 410:
             raise e
     return count
 

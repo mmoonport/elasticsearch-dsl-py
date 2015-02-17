@@ -1,57 +1,63 @@
-import re
-
-from elasticsearch import Elasticsearch
-from retrying import retry
-from elasticsearch_dsl.utils import _count_index, _delete_document, _get_document, _save_document, _drop_index
+from elasticsearch_dsl.result import ResultMeta
+from elasticsearch_dsl.utils import _count_index, _delete_document, _get_document, _save_document, _drop_index, \
+    _make_doc_type_from_name
 
 from .search import Search
 from .mapping import Mapping
 from .fields import BaseField, DOC_META_FIELDS, META_FIELDS, FULL_META_FIELDS
 from .connections import connections
-from .exceptions import ValidationError
+from .exceptions import ValidationError, ReadOnlyException
 from .queue import Queue
 
 class BulkInsert(object):
     def __init__(self, cls, index=None):
         self.doc_class = cls
-        self.prev_index = self.doc_class.meta.index
-        self.doc_class.meta.index = index or self.prev_index
-        self.index = self.doc_class.meta.index
+        self.prev_index = self.doc_class._d.index
+        self.doc_class._d.index = index or self.prev_index
+        self.index = self._d.index
 
     def __enter__(self):
-        self.doc_class._bulk = True
+        self.doc_class._d._bulk = True
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.doc_class._bulk = False
-        self.doc_class.meta.index = self.prev_index
-        self.doc_class._bulk_queue._send(self.index)
+        self.doc_class._d._bulk = False
+        self.doc_class._d.index = self.prev_index
+        self.doc_class._queue._send(self.index)
 
 
-class MetaDict(object):
+class DocMapping(object):
     def __init__(self, name, bases, fields):
-        meta = fields.pop('meta', None)
-        self.index = meta.get('index', None) if meta else None
-        self._using = meta.get('using', None) if meta else None
-        self.bulk_size = meta.get('bulk_size', None) if meta else None
-        self.doc_info = {}
-        self.doc_type = meta.get('doc_type', re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()) \
-            if meta else re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()
+        meta = fields.pop('meta', {})
+        self.index = meta.get('index', None)
+        self._using = meta.get('using', None)
+        self._bulk = meta.get('bulk', None)
+        self._bulk_size = meta.get('bulk_size', None)
+        self._read_only = meta.get('read_only', False)
+        doc_type = meta.get('doc_type', _make_doc_type_from_name(name))
+        self.mapping = meta.get('mapping', Mapping(doc_type))
 
-        self.mapping = meta.get('mapping', Mapping(self.doc_type)) if meta else Mapping(self.doc_type)
+
+        for b in bases:
+            if hasattr(b, '_d') and hasattr(b._d, 'mapping'):
+                self.mapping.update(b._d.mapping, update_only=True)
+                self._using = self._using or b._d._using
+                self.index = self.index or b._d.index
+                self._bulk = self._bulk or b._d._bulk
+                self._bulk_size = self._bulk_size or b._d._bulk_size
+                self._read_only = self._read_only or b._d._read_only
 
         # register all declared fields into the mapping
-        for name, value in list(fields.iteritems()):
+        for field_name, value in list(fields.iteritems()):
             if isinstance(value, BaseField):
-                self.mapping.field(name, value)
+                self.mapping.field(field_name, value)
 
-    def __getitem__(self, item):
-        return self.__dict__[item]
+    @property
+    def doc_type(self):
+        return self.mapping.properties.name
 
-
-    def __iter__(self):
-        for attr in dir(self):
-            if not attr.startswith('__'):
-                yield attr
+    @property
+    def using(self):
+        return self._using or 'default'
 
     def init(self, index=None, using=None):
         self.mapping.save(index or self.index, using=using or self._using)
@@ -59,83 +65,46 @@ class MetaDict(object):
     def refresh(self, index=None, using=None):
         self.mapping.update_from_es(index or self.index, using=using or self._using)
 
-    @property
-    def name(self):
-        return self.mapping.properties.name
 
 class BaseDocumentMeta(type):
 
     def __new__(cls, name=None, bases=None, fields=None):
         super_new = super(BaseDocumentMeta, cls).__new__
-        if name.startswith('None'):
-            return None
-
+        fields['_d'] = DocMapping(name, bases, fields)
         new_class = super_new(cls, name, bases, fields)
-        new_class.meta = MetaDict(name, bases, fields)
-        new_class.meta._using = Elasticsearch(hosts='es.xocur.com:9200')
-        new_class._data = {}
-        new_class._bulk = False
+        new_class._queue = Queue(index=fields['_d'].index,
+                                 using=fields['_d'].using,
+                                 limit=fields['_d']._bulk_size or 100)
 
-        # document inheritance - include the fields from parents' mappings and
-        # index/using values
-        doc_fields = {}
-        for b in bases:
-            if hasattr(b, 'meta') and hasattr(b.meta, 'mapping'):
-                new_class.meta.mapping.update(b.meta.mapping, update_only=True)
-                new_class.meta._using = new_class.meta._using or b.meta._using
-                new_class.meta.index = new_class.meta.index or b.meta.index
-                new_class.meta.doc_type = new_class.meta.doc_type or b.meta.doc_type
-                new_class.meta.bulk_size = new_class.meta.bulk_size or b.meta.bulk_size
+        new_class._fields = {field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)}
 
-            if hasattr(b, '_fields'):
-                for field_name, field in b._fields.iteritems():
-                    if isinstance(field, BaseField):
-                        doc_fields[field_name] = field
-
-        new_class._bulk_queue = Queue(index=new_class.meta.index,
-                                      using=new_class.meta._using,
-                                      limit=new_class.meta.bulk_size)
-
-        for field_name, field in fields.iteritems():
-            if isinstance(field, BaseField):
-                doc_fields[field_name] = field
-
-        new_class._fields = doc_fields
-
-        # if 'query' not in dir(new_class):
+        #if 'query' not in dir(new_class):
         new_class.query = Search(
-            using=new_class.meta._using,
-            index=new_class.meta.index,
-            doc_type={new_class.meta.doc_type: new_class.from_es})
+            using=fields['_d'].using,
+            index=fields['_d'].index,
+            doc_type={fields['_d'].doc_type: new_class.from_es})
         return new_class
-
-
-
 
 
 class BaseDocument(object):
     __metaclass__ = BaseDocumentMeta
-    def __init__(self, **kwargs):
+    def __init__(self, id=None, **kwargs):
         self._data = {}
-        self.meta.doc_info = {}
-        errors = []
         for name, field in self._fields.iteritems():
             if name in kwargs.keys():
                 setattr(self, name, field.to_python(kwargs.get(name)))
             else:
                 setattr(self, name, field.to_python(field.default))
-
-
-        for k in META_FIELDS:
-            if '_' + k in kwargs.keys():
-                if k == "type":
-                    self.meta.doc_info['doc_type'] = kwargs['_{}'.format(k)]
-                else:
-                    self.meta.doc_info[k] = kwargs['_{}'.format(k)]
+        meta = {'id': id}
+        for k in list(kwargs):
+            if k.startswith('_') and k[1:] in META_FIELDS:
+                meta[k] = kwargs.pop(k)
+        self._meta = ResultMeta(meta)
 
 
     def __setattr__(self, key, value):
-        self._data[key] = value
+        if key not in ['_data', '_meta']:
+            self._data[key] = value
         super(BaseDocument, self).__setattr__(key, value)
 
     @classmethod
@@ -149,27 +118,27 @@ class BaseDocument(object):
 
     @property
     def id(self):
-        return self.meta.doc_info.get('id', None)
+        return self._meta.id
 
     @id.setter
     def id(self, id):
-        self.meta.doc_info['id'] = id;
+        self._meta.id = id
 
     @classmethod
     def init(cls, index=None, using=None):
-        cls.meta.init(index, using)
+        cls._d.init(index, using)
 
     @classmethod
     def count(cls, using=None, index=None, doc_type=None):
-        es = connections.get_connection(using or cls.meta._using)
-        count = _count_index(es, index=(index or cls.meta.index), doc_type=(doc_type or cls.meta.doc_info.get('doc_type', cls.meta.name)))
+        es = connections.get_connection(using or cls._d._using)
+        count = _count_index(es, index=index or cls._d.index, doc_type=doc_type or cls._d.doc_type)
         return count.get('count', 0)
 
     @classmethod
     def from_es(cls, hit):
         doc = hit.copy()
         doc.update(doc.pop('_source'))
-        return cls(**doc)
+        return cls(id=doc.pop('_id'), **doc)
 
     def validate(self):
         errors = []
@@ -189,66 +158,63 @@ class BaseDocument(object):
     def delete(self, using=None, index=None, **kwargs):
         es = self._get_connection(using)
         if index is None:
-            index = self.meta.doc_info.get('index', self.meta.index)
+            index = getattr(self._meta, 'index', self._d.index)
         if index is None:
             raise #XXX - no index
         # extract parent, routing etc from _meta
-        doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
+        doc_meta = dict((k, self._meta[k]) for k in DOC_META_FIELDS if k in self._meta)
         doc_meta.update(kwargs)
 
         return _delete_document(es, index=index,
-                                doc_type=self.meta.doc_info.get('doc_type', self.meta.name),
+                                doc_type=getattr(self._meta, 'doc_type', self._d.doc_type),
                                 extra=doc_meta)
 
 
     @classmethod
     def get(cls, id, using=None, index=None, **kwargs):
-        es = connections.get_connection(using or cls.meta._using)
-        doc = _get_document(es, index=index or cls.meta.index,
-            doc_type=cls.meta.name,
+        es = connections.get_connection(using or cls._d._using)
+        doc = _get_document(es, index=index or cls._d.index,
+            doc_type=cls._d.doc_type,
             id=id,
             **kwargs)
         return cls.from_es(doc)
 
-    def save(self, using=None, index=None, bulk=False, flush=False, **kwargs):
-        self.clean()
-        self.validate()
+    def save(self, using=None, index=None, bulk=False, flush=False, force=False, **kwargs):
+        if not self._d._read_only or self._d._read_only and force:
+            self.clean()
+            self.validate()
 
-        es = self._get_connection(using)
-        if index is None:
-            index = self.meta.doc_info.get('index', self.meta.index)
-        if index is None:
-            raise #XXX - no index
-        # extract parent, routing etc from _meta
-        self.meta.doc_info['index'] = index
-        self.meta.doc_info['doc_type'] = self.meta.doc_info.get('doc_type', self.meta.name)
-        doc_meta = dict((k, self.meta.doc_info.get(k)) for k in DOC_META_FIELDS if k in self.meta.doc_info.keys())
-        doc_meta.update(kwargs)
+            es = self._get_connection(using)
+            if index is None:
+                index = getattr(self._meta, 'index', self._d.index)
+            if index is None:
+                raise #XXX - no index
 
-        if bulk or self._bulk:
-            self._bulk_queue.append(self, index)
-            if flush:
-                self._bulk_queue._send(index)
-            return True
+            # extract parent, routing etc from _meta
+            doc_meta = dict((k, self._meta[k]) for k in DOC_META_FIELDS if k in self._meta)
+            doc_meta.update(kwargs)
+            if bulk or self._d._bulk:
+                self._queue.append(self, index)
+                if flush:
+                    self._queue._send(index)
+                return True
 
-        meta = _save_document(es,
-                              index=self.meta.doc_info['index'],
-                              doc_type=self.meta.doc_info['doc_type'],
-                              body=self.to_dict(),
-                              extra=doc_meta)
-        # update meta information from ES
-        for k in META_FIELDS:
-            if '_' + k in meta:
-                if k == "type":
-                    self.meta.doc_info['doc_type'] = meta['_{}'.format(k)]
-                else:
-                    self.meta.doc_info[k] = meta['_{}'.format(k)]
-        # return True/False if the document has been created/updated
-        return meta['created']
+            meta = _save_document(es,
+                                  index=index,
+                                  doc_type=self._d.doc_type,
+                                  body=self.to_dict(),
+                                  extra=doc_meta)
+            # update meta information from ES
+            for k in META_FIELDS:
+                if '_{}'.format(k) in meta:
+                    setattr(self._meta, k, meta['_{}'.format(k)])
+            # return True/False if the document has been created/updated
+            return meta['created']
+        raise ReadOnlyException('This document is read only. To force save set force=True in save call')
 
 
     def _get_connection(self, using=None):
-        return connections.get_connection(using or self.meta._using)
+        return connections.get_connection(using or self._d._using)
 
     def to_dict(self):
         data = {}
@@ -262,10 +228,8 @@ class BaseDocument(object):
 
 
     def to_es(self):
-        self.meta.doc_info['index'] = self.meta.doc_info.get('index', self.meta.index)
-        self.meta.doc_info['doc_type'] = self.meta.doc_info.get('doc_type', self.meta.name)
         doc = {"_source": self.to_dict()}
-        doc_meta = dict(("_{}".format(k), self.meta.doc_info.get(k)) for k in FULL_META_FIELDS  if k in self.meta.doc_info.keys() and self.meta.doc_info[k] is not None)
-        doc_meta['_type'] = doc_meta.pop('_doc_type')
+        doc_meta = dict((k, self._meta[k]) for k in FULL_META_FIELDS if k in self._meta)
+        doc_meta['_type'] = getattr(self._meta, 'doc_type', self._d.doc_type)
         doc.update(doc_meta)
         return doc

@@ -1,3 +1,6 @@
+class ReadOnlyException(Exception):
+    pass
+
 class ElasticsearchDslException(Exception):
     pass
 
