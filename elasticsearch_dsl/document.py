@@ -76,7 +76,12 @@ class BaseDocumentMeta(type):
                                  using=fields['_d'].using,
                                  limit=fields['_d']._bulk_size or 100)
 
-        new_class._fields = {field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)}
+        new_class._fields = {}
+        for b in bases:
+            if hasattr(b, '_fields'):
+                new_class._fields.update(b._fields)
+        new_class._fields.update({field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)})
+
 
         #if 'query' not in dir(new_class):
         new_class.query = Search(
