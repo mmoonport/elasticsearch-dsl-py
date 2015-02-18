@@ -114,9 +114,9 @@ class BaseDocument(object):
 
     @classmethod
     def drop(cls, index=None, using=None):
-        es = connections.get_connection(using or cls.meta._using)
+        es = connections.get_connection(using or cls._meta._using)
         try:
-            resp = _drop_index(es, index or cls.meta.index)
+            resp = _drop_index(es, index or cls._meta.index)
             return resp
         except:
             return None
