@@ -1,3 +1,4 @@
+from six import add_metaclass
 from elasticsearch_dsl.result import ResultMeta
 from elasticsearch_dsl.utils import _count_index, _delete_document, _get_document, _save_document, _drop_index, \
     _make_doc_type_from_name
@@ -14,7 +15,7 @@ class BulkInsert(object):
         self.doc_class = cls
         self.prev_index = self.doc_class._d.index
         self.doc_class._d.index = index or self.prev_index
-        self.index = self._d.index
+        self.index = self.doc_class._d.index
 
     def __enter__(self):
         self.doc_class._d._bulk = True
@@ -71,28 +72,28 @@ class BaseDocumentMeta(type):
     def __new__(cls, name=None, bases=None, fields=None):
         super_new = super(BaseDocumentMeta, cls).__new__
         fields['_d'] = DocMapping(name, bases, fields)
-        new_class = super_new(cls, name, bases, fields)
-        new_class._queue = Queue(index=fields['_d'].index,
+        fields['_queue'] = Queue(index=fields['_d'].index,
                                  using=fields['_d'].using,
                                  limit=fields['_d']._bulk_size or 100)
 
-        new_class._fields = {}
+        _fields = {}
         for b in bases:
             if hasattr(b, '_fields'):
-                new_class._fields.update(b._fields)
-        new_class._fields.update({field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)})
+                _fields.update(b._fields)
+        _fields.update({field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)})
+        fields['_fields'] = _fields
 
+        if fields.get('from_es', None):
+            fields['query'] = Search(
+                using=fields['_d'].using,
+                index=fields['_d'].index,
+                doc_type={fields['_d'].doc_type: fields['from_es']})
 
-        #if 'query' not in dir(new_class):
-        new_class.query = Search(
-            using=fields['_d'].using,
-            index=fields['_d'].index,
-            doc_type={fields['_d'].doc_type: new_class.from_es})
+        new_class = super_new(cls, name, bases, fields)
         return new_class
 
 
 class BaseDocument(object):
-    __metaclass__ = BaseDocumentMeta
     def __init__(self, id=None, **kwargs):
         self._data = {}
         for name, field in self._fields.iteritems():
@@ -112,15 +113,6 @@ class BaseDocument(object):
             self._data[key] = value
         super(BaseDocument, self).__setattr__(key, value)
 
-    @classmethod
-    def drop(cls, index=None, using=None):
-        es = connections.get_connection(using or cls._meta._using)
-        try:
-            resp = _drop_index(es, index or cls._meta.index)
-            return resp
-        except:
-            return None
-
     @property
     def id(self):
         return self._meta.id
@@ -132,6 +124,17 @@ class BaseDocument(object):
     @classmethod
     def init(cls, index=None, using=None):
         cls._d.init(index, using)
+
+@add_metaclass(BaseDocumentMeta)
+class Document(BaseDocument):
+    @classmethod
+    def drop(cls, index=None, using=None):
+        es = connections.get_connection(using or cls._d._using)
+        try:
+            resp = _drop_index(es, index or cls._d.index)
+            return resp
+        except:
+            return None
 
     @classmethod
     def count(cls, using=None, index=None, doc_type=None):
