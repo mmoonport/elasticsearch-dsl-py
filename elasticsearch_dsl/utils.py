@@ -444,118 +444,68 @@ class ObjectBase(AttrDict):
         return out
 
 
+def retry_if_valid_exception(e):
+    _retry = True
+    status = e.status_code
+    if status is TIMEOUT or 400 < status < 410:
+        _retry = False
+    return _retry
+
+
 # Retry wrapped es functions
-@retry(stop_max_attempt_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000, retry_on_exception=retry_if_valid_exception)
 def _save_document(conn, index, doc_type, body, extra):
-    resp = None
-    try:
-        resp = conn.index(index=index, doc_type=doc_type, body=body, **extra)
-        print resp
-    except TransportError, e:
-        print e
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return resp
+    return conn.index(index=index, doc_type=doc_type, body=body, **extra)
 
 
-@retry(stop_max_attempt_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000, retry_on_exception=retry_if_valid_exception)
 def _delete_document(conn, index, doc_type, extra):
-    resp = None
-    try:
-        resp = conn.delete(index=index, doc_type=doc_type, **extra)
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return resp
+    return conn.delete(index=index, doc_type=doc_type, **extra)
 
 
-@retry(stop_max_attempt_number=5, wait_fixed=3000)
+@retry(stop_max_attempt_number=5, wait_fixed=3000, retry_on_exception=retry_if_valid_exception)
 def _get_document(es, index, doc_type, id, kwargs):
-    resp = None
-    try:
-        resp = es.get(index=index, doc_type=doc_type, id=id, **kwargs)
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return resp
+    return es.get(index=index, doc_type=doc_type, id=id, **kwargs)
 
 
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000, retry_on_exception=retry_if_valid_exception)
 def _drop_index(conn, index):
-    resp = None
-    try:
-        resp = conn.indices.delete(index)
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return resp
+    return conn.indices.delete(index)
 
 
-@retry(wait_fixed=60000)
+@retry(wait_fixed=60000, retry_on_exception=retry_if_valid_exception)
 def _bulk(conn, index, actions, chunk_size, timeout):
     return bulk(client=conn, index=index, actions=actions, chunk_size=chunk_size, timeout=timeout)
 
 
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000, retry_on_exception=retry_if_valid_exception)
 def _count_index(conn, index, doc_type):
-    count = {}
-    try:
-        count = conn.count(
-            index=index,
-            doc_type=doc_type)
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return count
+    return conn.count(index=index, doc_type=doc_type)
 
 
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000, retry_on_exception=retry_if_valid_exception)
 def _search(conn, index, doc_type, body, extra):
-    resp = None
-    try:
-        resp = conn.search(
-            index=index,
-            doc_type=doc_type,
-            body=body,
-            **extra
-        )
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return resp
+    return conn.search(
+        index=index,
+        doc_type=doc_type,
+        body=body,
+        **extra
+    )
 
 
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000, retry_on_exception=retry_if_valid_exception)
 def _count_search(conn, index, doc_type, body):
-    count = {}
-    try:
-        count = conn.count(
-            index=index,
-            doc_type=doc_type,
-            body=body)
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
-    return count
+    return conn.count(
+        index=index,
+        doc_type=doc_type,
+        body=body)
 
 
-@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
+@retry(wait_exponential_multiplier=4000, wait_exponential_max=60000, retry_on_exception=retry_if_valid_exception)
 def _scan(conn, query, index, doc_type, params):
-    try:
-        return scan(
-            conn,
-            query=query,
-            index=index,
-            doc_type=doc_type,
-        )
-    except TransportError, e:
-        status = e.status_code
-        if status is TIMEOUT or 400 < status < 410:
-            raise e
+    return scan(
+        conn,
+        query=query,
+        index=index,
+        doc_type=doc_type,
+    )
