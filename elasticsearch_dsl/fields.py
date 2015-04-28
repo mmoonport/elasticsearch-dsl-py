@@ -153,7 +153,7 @@ class FloatField(BaseField):
 
     def to_python(self, value):
         if value:
-            return int(value)
+            return float(value)
         return None
 
     def validate(self, value):
