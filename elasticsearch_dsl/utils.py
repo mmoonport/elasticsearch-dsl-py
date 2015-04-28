@@ -525,7 +525,8 @@ def _search(conn, index, doc_type, body, extra):
             **extra
         )
     except TransportError, e:
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return resp
 
@@ -539,16 +540,22 @@ def _count_search(conn, index, doc_type, body):
             doc_type=doc_type,
             body=body)
     except TransportError, e:
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return count
 
 
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _scan(conn, query, index, doc_type, params):
-    return scan(
-        conn,
-        query=query,
-        index=index,
-        doc_type=doc_type,
-    )
+    try:
+        return scan(
+            conn,
+            query=query,
+            index=index,
+            doc_type=doc_type,
+        )
+    except TransportError, e:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
+            raise e
