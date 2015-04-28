@@ -83,13 +83,13 @@ class BaseDocumentMeta(type):
         _fields.update({field_name: field for field_name, field in fields.iteritems() if isinstance(field, BaseField)})
         fields['_fields'] = _fields
 
-        if fields.get('from_es', None):
-            fields['query'] = Search(
-                using=fields['_d'].using,
-                index=fields['_d'].index,
-                doc_type={fields['_d'].doc_type: fields['from_es']})
-
         new_class = super_new(cls, name, bases, fields)
+
+        new_class.query = Search(
+            using=fields['_d'].using,
+            index=fields['_d'].index,
+            doc_type={fields['_d'].doc_type: new_class.from_es})
+
         return new_class
 
 
