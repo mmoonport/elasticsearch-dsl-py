@@ -9,8 +9,10 @@ from six.moves import map
 
 from .exceptions import UnknownDslObject
 
+
 def _make_doc_type_from_name(name):
     return re.sub(r'(.)([A-Z])', r'\1_\2', name).lower()
+
 
 def _wrap(val):
     if isinstance(val, dict):
@@ -18,6 +20,10 @@ def _wrap(val):
     if isinstance(val, list) and not isinstance(val, AttrList):
         return AttrList(val)
     return val
+
+
+TIMEOUT = 'TIMEOUT'
+
 
 def _make_dsl_class(base, name, params_def=None):
     """
@@ -28,6 +34,7 @@ def _make_dsl_class(base, name, params_def=None):
         attrs['_param_defs'] = params_def
     cls_name = str(''.join(s.title() for s in name.split('_')))
     return type(cls_name, (base, ), attrs)
+
 
 class AttrList(object):
     def __init__(self, l):
@@ -59,6 +66,7 @@ class AttrList(object):
 
     def __nonzero__(self):
         return bool(self._l_)
+
     __bool__ = __nonzero__
 
     def __getattr__(self, name):
@@ -71,6 +79,7 @@ class AttrDict(object):
     dictionaries. Used to provide a convenient way to access both results and
     nested dsl dicts.
     """
+
     def __init__(self, d):
         # assign the inner dict manually to prevent __setattr__ from firing
         super(AttrDict, self).__setattr__('_d_', d)
@@ -80,6 +89,7 @@ class AttrDict(object):
 
     def __nonzero__(self):
         return bool(self._d_)
+
     __bool__ = __nonzero__
 
     def __dir__(self):
@@ -118,6 +128,7 @@ class AttrDict(object):
 
     def __setitem__(self, key, value):
         self._d_[key] = value
+
     __setattr__ = __setitem__
 
     def __iter__(self):
@@ -140,6 +151,7 @@ class DslMeta(type):
     For typical use see `QueryMeta` and `Query` in `elasticsearch_dsl.query`.
     """
     _types = {}
+
     def __init__(cls, name, bases, attrs):
         super(DslMeta, cls).__init__(name, bases, attrs)
         # skip for DslBase
@@ -332,6 +344,7 @@ class BoolMixin(object):
     """
     Mixin containing all the operator overrides for Bool queries and filters.
     """
+
     def __and__(self, other):
         q = self._clone()
         if isinstance(other, self.__class__):
@@ -350,6 +363,7 @@ class BoolMixin(object):
         else:
             q.must.append(other)
         return q
+
     __rand__ = __and__
 
     def __add__(self, other):
@@ -361,6 +375,7 @@ class BoolMixin(object):
         else:
             q.must.append(other)
         return q
+
     __radd__ = __add__
 
     def __or__(self, other):
@@ -377,6 +392,7 @@ class BoolMixin(object):
             return q
 
         return super(BoolMixin, self).__or__(other)
+
     __ror__ = __or__
 
     def __invert__(self):
@@ -428,7 +444,6 @@ class ObjectBase(AttrDict):
         return out
 
 
-
 # Retry wrapped es functions
 @retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _save_document(conn, index, doc_type, body, extra):
@@ -438,9 +453,11 @@ def _save_document(conn, index, doc_type, body, extra):
         print resp
     except TransportError, e:
         print e
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return resp
+
 
 @retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _delete_document(conn, index, doc_type, extra):
@@ -448,21 +465,23 @@ def _delete_document(conn, index, doc_type, extra):
     try:
         resp = conn.delete(index=index, doc_type=doc_type, **extra)
     except TransportError, e:
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return resp
+
 
 @retry(stop_max_attempt_number=5, wait_fixed=3000)
 def _get_document(es, index, doc_type, id, kwargs):
     resp = None
     try:
         resp = es.get(index=index, doc_type=doc_type, id=id, **kwargs)
-        print resp
     except TransportError, e:
-        print e
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return resp
+
 
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _drop_index(conn, index):
@@ -470,51 +489,52 @@ def _drop_index(conn, index):
     try:
         resp = conn.indices.delete(index)
     except TransportError, e:
-        if 400 < e.status_code < 410:
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return resp
+
 
 @retry(wait_fixed=60000)
 def _bulk(conn, index, actions, chunk_size, timeout):
     return bulk(client=conn, index=index, actions=actions, chunk_size=chunk_size, timeout=timeout)
 
+
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _count_index(conn, index, doc_type):
-    print 'in count function'
     count = {}
     try:
-        count =  conn.count(
+        count = conn.count(
             index=index,
             doc_type=doc_type)
-        print 'got count of {}'.format(count)
     except TransportError, e:
-        print 'whoops: {}'.format(e)
-        print type(e.status_code)
-        if 400 < e.status_code < 410:
-            print 'raising e'
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
             raise e
     return count
+
 
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _search(conn, index, doc_type, body, extra):
     resp = None
     try:
         resp = conn.search(
-                index=index,
-                doc_type=doc_type,
-                body=body,
-                **extra
-            )
+            index=index,
+            doc_type=doc_type,
+            body=body,
+            **extra
+        )
     except TransportError, e:
         if 400 < e.status_code < 410:
             raise e
     return resp
 
+
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _count_search(conn, index, doc_type, body):
     count = {}
     try:
-        count =  conn.count(
+        count = conn.count(
             index=index,
             doc_type=doc_type,
             body=body)
@@ -523,11 +543,12 @@ def _count_search(conn, index, doc_type, body):
             raise e
     return count
 
+
 @retry(wait_exponential_multiplier=4000, wait_exponential_max=60000)
 def _scan(conn, query, index, doc_type, params):
     return scan(
-                conn,
-                query=query,
-                index=index,
-                doc_type=doc_type,
-            )
+        conn,
+        query=query,
+        index=index,
+        doc_type=doc_type,
+    )
