@@ -1,10 +1,8 @@
 from elasticsearch_dsl.connections import connections
 from elasticsearch_dsl.utils import _bulk
 
-
 __author__ = 'Matthew Moon'
 __filename__ = 'queue'
-
 
 
 class Queue(object):
@@ -23,7 +21,7 @@ class Queue(object):
             self._send(index)
 
     def _iter_queue(self, queue='default'):
-        for item in self._queue[queue]:
+        for item in self._queue.get(queue, []):
             yield item.to_es()
 
     def _send(self, index):
@@ -31,5 +29,3 @@ class Queue(object):
         index = (index or self.index)
         _bulk(conn=es, index=index, actions=self._iter_queue(index), chunk_size=self.limit, timeout=60)
         self._queue[index] = []
-
-

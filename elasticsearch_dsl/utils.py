@@ -1,11 +1,10 @@
 from __future__ import unicode_literals
 import re
 from elasticsearch import TransportError
-from elasticsearch.helpers import bulk, scan
+from elasticsearch.helpers import bulk, scan, BulkIndexError
 from retrying import retry
 
 from six import iteritems, add_metaclass
-from six.moves import map
 
 from .exceptions import UnknownDslObject
 
@@ -33,7 +32,7 @@ def _make_dsl_class(base, name, params_def=None):
     if params_def:
         attrs['_param_defs'] = params_def
     cls_name = str(''.join(s.title() for s in name.split('_')))
-    return type(cls_name, (base, ), attrs)
+    return type(cls_name, (base,), attrs)
 
 
 class AttrList(object):
@@ -446,8 +445,13 @@ class ObjectBase(AttrDict):
 
 def retry_if_valid_exception(e):
     _retry = True
-    status = e.status_code
-    if status is TIMEOUT or 400 < status < 410:
+    if isinstance(e, TransportError):
+        status = e.status_code
+        if status is TIMEOUT or 400 < status < 410:
+            _retry = False
+    elif isinstance(e, BulkIndexError):
+        _retry = True
+    else:
         _retry = False
     return _retry
 
