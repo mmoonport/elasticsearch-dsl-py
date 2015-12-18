@@ -5,7 +5,7 @@ from elasticsearch.helpers import bulk, scan, BulkIndexError
 from retrying import retry
 
 from six import iteritems, add_metaclass
-
+from six.moves import map
 from .exceptions import UnknownDslObject
 
 
